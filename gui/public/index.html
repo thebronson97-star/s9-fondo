@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="S9-TRIPLEX">
+<meta name="theme-color" content="#0a0b0f">
+<title>Fondo S9-TRIPLEX — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0a0b0f; font-family: 'Inter', sans-serif; color: #e2e4f0; height: 100vh; overflow: hidden; }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: #10121a; }
+  ::-webkit-scrollbar-thumb { background: #1e2235; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #262b3e; }
+  select { color: #e2e4f0; }
+  select option { background: #161925; }
+  input::placeholder { color: #4a5270; }
+  input:focus { border-color: #4f8ef7 !important; }
+  textarea:focus { border-color: #4f8ef7 !important; }
+  @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  @keyframes slide-in { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:none} }
+  .log-entry { animation: slide-in 0.2s ease; }
+
+  @media (max-width: 768px) {
+    body { overflow: auto !important; }
+    #root > div { flex-direction: column !important; height: auto !important; min-height: 100vh; }
+    #s9-sidebar { width: 100% !important; height: auto !important; border-right: none !important; border-bottom: 1px solid #1e2235 !important; flex-direction: row !important; flex-wrap: wrap; }
+    #s9-sidebar .s9-logo { display: none; }
+    #s9-sidebar .s9-motor { display: none; }
+    #s9-sidebar nav { display: flex !important; flex-direction: row !important; flex-wrap: wrap; padding: 4px 8px !important; gap: 0 !important; }
+    #s9-sidebar nav > div { padding: 8px 10px !important; font-size: 11px !important; border-radius: 6px !important; border: none !important; }
+    #s9-sidebar .s9-version { display: none; }
+    #s9-topbar { height: auto !important; flex-wrap: wrap; gap: 8px !important; padding: 10px !important; }
+    #s9-topbar .s9-breadcrumb { display: none; }
+    #s9-topbar .s9-cot { display: none; }
+    #s9-main { overflow: auto !important; padding: 12px !important; }
+    #s9-main > div > div[style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
+  }
+  @media (max-width: 480px) {
+    #s9-sidebar nav > div { font-size: 10px !important; padding: 6px 8px !important; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="fondo-sections.jsx"></script>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+function useLS(key, defaultVal) {
+  const [val, setVal] = useState(() => {
+    try { const stored = localStorage.getItem(key); return stored ? JSON.parse(stored) : defaultVal; } catch { return defaultVal; }
+  });
+  const set = useCallback((v) => {
+    setVal(prev => {
+      const next = typeof v === 'function' ? v(prev) : v;
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [key]);
+  return [val, set];
+}
+
+const NAV = [
+  { id: 'dashboard',   label: 'Dashboard',     icon: '◈' },
+  { id: 'posiciones',  label: 'Posiciones',    icon: '◉' },
+  { id: 'senales',     label: 'Señales',       icon: '◎' },
+  { id: 'ordenes',     label: 'Órdenes',       icon: '⚡' },
+  { id: 'estrategias', label: 'Estrategias',   icon: '◑' },
+  { id: 'backtest',    label: 'Backtest',      icon: '◇' },
+  { id: 'config',      label: 'Configuración', icon: '⊞' },
+  { id: 'apis',        label: 'APIs & Claves', icon: '⊛' },
+  { id: 'deploy',      label: 'Despliegue',    icon: '☁' },
+];
+
+const MOTOR_STATES = {
+  STOP:    { label: 'STOP',    color: '#4a5270', bg: '#1c2030' },
+  RUNNING: { label: 'EN VIVO', color: '#22c97a', bg: '#0d2e1a' },
+  PAUSED:  { label: 'PAUSADO', color: '#f0b429', bg: '#2a1f00' },
+};
+
+let _logId = 100;
+function makeLog(override) {
+  const [level, msg] = override || window.LOG_TEMPLATES[Math.floor(Math.random() * window.LOG_TEMPLATES.length)];
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  return { id: ++_logId, time: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`, level, msg };
+}
+
+const INIT_LOGS = [];
+
+// WebSocket + API sync hook
+function useEngine(setLogs, setPositions, setSignals) {
+  const [engineMode, setEngineMode] = useState('STOP');
+  const [connected, setConnected]   = useState(false);
+  const [equity, setEquity]         = useState(10000);
+  const [dailyPnL, setDailyPnL]     = useState(0);
+  const wsRef    = useRef(null);
+  const retryRef = useRef(0);
+  const timerRef = useRef(null);
+
+  const connect = useCallback(() => {
+    try {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${proto}://${location.host}/ws`);
+      wsRef.current = ws;
+      ws.onopen  = () => {
+        setConnected(true);
+        retryRef.current = 0;
+        // Mensajes de arranque con datos reales del servidor
+        fetch('/api/state').then(r => r.json()).then(s => {
+          const now = new Date();
+          const pad = n => String(n).padStart(2,'0');
+          const ts  = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+          const msgs = [];
+          msgs.push({ level: 'INFO', msg: `S9-TRIPLEX conectado | Modo: ${s.mode} | Equity: $${(s.equity || 0).toLocaleString()}` });
+          if (s.strategyLoaded && s.strategyName)
+            msgs.push({ level: 'INFO', msg: `Estrategia activa: ${s.strategyName}` });
+          else
+            msgs.push({ level: 'WARN', msg: 'Sin estrategia cargada — activa una en Configuración' });
+          if (s.positions > 0)
+            msgs.push({ level: 'INFO', msg: `${s.positions} posición(es) abierta(s)` });
+          if (s.dailyPnL !== 0 && s.dailyPnL != null)
+            msgs.push({ level: s.dailyPnL >= 0 ? 'INFO' : 'WARN', msg: `P&L hoy: ${s.dailyPnL >= 0 ? '+' : ''}$${s.dailyPnL.toFixed(2)}` });
+          setLogs(prev => [
+            ...msgs.map((m, i) => ({ id: ++_logId, time: ts, level: m.level, msg: m.msg })),
+            ...prev,
+          ].slice(0, 200));
+        }).catch(() => {});
+      };
+      ws.onerror = () => ws.close();
+      ws.onclose = () => {
+        setConnected(false);
+        const delay = Math.min(30000, 1000 * Math.pow(2, retryRef.current++));
+        timerRef.current = setTimeout(connect, delay);
+      };
+      ws.onmessage = ({ data }) => {
+        try {
+          const msg = JSON.parse(data);
+          if (msg.type === 'state') {
+            const s = msg.state || {};
+            if (s.mode != null)     setEngineMode(s.mode);
+            if (s.equity != null)   setEquity(s.equity);
+            if (s.dailyPnL != null) setDailyPnL(s.dailyPnL);
+          } else if (msg.type === 'positions') {
+            if (setPositions && Array.isArray(msg.positions)) setPositions(msg.positions);
+          } else if (msg.type === 'signal') {
+            if (setSignals) setSignals(prev => [msg, ...prev].slice(0, 200));
+          } else if (msg.type === 'log') {
+            const now = new Date();
+            const pad = n => String(n).padStart(2,'0');
+            setLogs(prev => [{
+              id: ++_logId,
+              time: msg.ts || `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+              level: (msg.level || 'info').toUpperCase(),
+              msg: msg.msg || '',
+            }, ...prev].slice(0, 200));
+          }
+        } catch {}
+      };
+    } catch {}
+  }, [setLogs]);
+
+  useEffect(() => {
+    connect();
+    return () => { clearTimeout(timerRef.current); wsRef.current?.close(); };
+  }, [connect]);
+
+  const motorState = engineMode === 'STOP' ? 'STOP'
+    : engineMode === 'OBSERVE' ? 'PAUSED'
+    : 'RUNNING';
+
+  return { motorState, engineMode, connected, equity, dailyPnL };
+}
+
+// Sidebar
+function Sidebar({ active, onChange, motorState }) {
+  const T = window.T;
+  const ms = MOTOR_STATES[motorState];
+  return (
+    <div id="s9-sidebar" style={{ width: 220, background: T.surf, borderRight: `1px solid ${T.bdr}`, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+      <div className="s9-logo" style={{ padding: '20px 20px 16px', borderBottom: `1px solid ${T.bdr}` }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: T.mut, marginBottom: 4 }}>FONDO ALGORITMICO</div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: T.txt, letterSpacing: '-0.01em', fontFamily: "'JetBrains Mono', monospace" }}>S9-TRIPLEX</div>
+        <div style={{ fontSize: 10, color: T.mut, marginTop: 2, letterSpacing: '0.05em' }}>AMT · PO3/SMT · Measured Move</div>
+      </div>
+
+      <div className="s9-motor" style={{ margin: '12px 14px', background: ms.bg, border: `1px solid ${ms.color}33`, borderRadius: 8, padding: '10px 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: ms.color, boxShadow: motorState === 'RUNNING' ? `0 0 8px ${ms.color}` : 'none', animation: motorState === 'RUNNING' ? 'pulse-dot 2s infinite' : 'none' }} />
+          <span style={{ fontSize: 12, fontWeight: 700, color: ms.color, letterSpacing: '0.08em', fontFamily: "'JetBrains Mono', monospace" }}>{ms.label}</span>
+        </div>
+        <div style={{ fontSize: 11, color: T.mut, marginTop: 4 }}>
+          {motorState === 'STOP' ? 'Motor detenido' : motorState === 'PAUSED' ? 'Motor en pausa (OBSERVE)' : 'Detectando confluencia (PAPER)'}
+        </div>
+      </div>
+
+      <nav style={{ flex: 1, padding: '4px 10px' }}>
+        {NAV.map(item => {
+          const isActive = active === item.id;
+          return (
+            <div key={item.id} onClick={() => onChange(item.id)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 7, marginBottom: 2, background: isActive ? `${T.acc}18` : 'transparent', border: `1px solid ${isActive ? T.acc + '44' : 'transparent'}`, cursor: 'pointer', transition: 'all 0.15s', color: isActive ? T.acc : T.mutHi }}>
+              <span style={{ fontSize: 14, width: 16, textAlign: 'center', flexShrink: 0 }}>{item.icon}</span>
+              <span style={{ fontSize: 13, fontWeight: isActive ? 600 : 400 }}>{item.label}</span>
+            </div>
+          );
+        })}
+      </nav>
+
+      <div className="s9-version" style={{ padding: '12px 20px', borderTop: `1px solid ${T.bdr}` }}>
+        <div style={{ fontSize: 10, color: T.mut }}>v2.0 · Node.js + Express</div>
+        <div style={{ fontSize: 10, color: T.mut, marginTop: 2 }}>BTCUSDT · ETHUSDT Futuros</div>
+      </div>
+    </div>
+  );
+}
+
+// TopBar
+function TopBar({ motorState, onMotorChange, section, connected, equity, dailyPnL }) {
+  const T = window.T;
+  const [time, setTime]             = useState(new Date());
+  const [killConfirm, setKillConfirm] = useState(false);
+  const peakRef = useRef(equity);
+
+  useEffect(() => {
+    const t = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const currentEquity = equity + (dailyPnL || 0);
+  useEffect(function() {
+    if (currentEquity > peakRef.current) peakRef.current = currentEquity;
+  }, [currentEquity]);
+
+  const colTime = time.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const sectionLabel = NAV.find(n => n.id === section)?.label || '';
+  const ddAbs   = Math.max(0, peakRef.current - currentEquity);
+  const ddPct   = peakRef.current > 0 ? ddAbs / peakRef.current * 100 : 0;
+  const ddColor = ddPct > 3 ? T.red : ddPct > 1 ? T.yel : T.grn;
+
+  const handleMotor = () => {
+    if (motorState === 'STOP') onMotorChange('RUNNING');
+    else if (motorState === 'RUNNING') onMotorChange('PAUSED');
+    else onMotorChange('RUNNING');
+  };
+  const handleKill = () => {
+    if (!killConfirm) { setKillConfirm(true); setTimeout(() => setKillConfirm(false), 3000); }
+    else { onMotorChange('STOP'); setKillConfirm(false); }
+  };
+
+  return (
+    <div id="s9-topbar" style={{ height: 56, background: T.surf, borderBottom: `1px solid ${T.bdr}`, display: 'flex', alignItems: 'center', padding: '0 20px', gap: 16, flexShrink: 0 }}>
+      <div className="s9-breadcrumb" style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 8 }}>
+        <span style={{ fontSize: 11, color: T.mut }}>S9</span>
+        <span style={{ fontSize: 11, color: T.mut }}>›</span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: T.txt }}>{sectionLabel}</span>
+      </div>
+
+      <div className="s9-cot" style={{ display: 'flex', alignItems: 'center', gap: 8, background: connected ? '#0d2e1a' : T.surf3, border: `1px solid ${connected ? T.grn + '44' : T.bdr2}`, borderRadius: 6, padding: '5px 12px' }}>
+        <div style={{ width: 6, height: 6, borderRadius: '50%', background: connected ? T.grn : T.mut, animation: connected ? 'pulse-dot 2s infinite' : 'none' }} />
+        <span style={{ fontSize: 12, color: connected ? T.grn : T.mut, fontWeight: 600 }}>{connected ? 'Motor conectado' : 'Sin conexion'}</span>
+      </div>
+
+      <div style={{ flex: 1 }} />
+
+      <div style={{ fontSize: 12, color: T.mutHi, display: 'flex', gap: 6, alignItems: 'center' }}>
+        <span style={{ color: T.mut }}>DD diario</span>
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", color: ddColor, fontWeight: 700 }}>{ddPct.toFixed(1)}%</span>
+        <span style={{ color: T.mut, fontSize: 10 }}>/ 5%</span>
+      </div>
+
+      <div style={{ fontSize: 12, color: T.mutHi, display: 'flex', gap: 6, alignItems: 'center' }}>
+        <span style={{ color: T.mut }}>Equity</span>
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", color: T.acc, fontWeight: 700 }}>${currentEquity.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+        {dailyPnL !== 0 && (
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: dailyPnL >= 0 ? T.grn : T.red }}>
+            {dailyPnL >= 0 ? '+' : ''}{dailyPnL.toFixed(0)}
+          </span>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: T.surf3, border: `1px solid ${T.bdr2}`, borderRadius: 6, padding: '5px 12px' }}>
+        <span style={{ fontSize: 10, color: T.mut }}>COL</span>
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 14, fontWeight: 700, color: T.txt }}>{colTime}</span>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <window.Btn
+          variant={motorState === 'STOP' ? 'grn' : motorState === 'RUNNING' ? 'default' : 'accent'}
+          onClick={handleMotor}
+          style={{ minWidth: 100 }}
+        >
+          {motorState === 'STOP' ? '▶ Iniciar' : motorState === 'RUNNING' ? '⏸ Pausar' : '▶ Reanudar'}
+        </window.Btn>
+        <window.Btn
+          variant={killConfirm ? 'danger' : 'ghost'}
+          onClick={handleKill}
+          style={{ minWidth: killConfirm ? 130 : 100 }}
+        >
+          {killConfirm ? '⚠ Confirmar KILL' : '⏹ Kill Switch'}
+        </window.Btn>
+      </div>
+    </div>
+  );
+}
+
+// App
+function App() {
+  const T = window.T;
+  const [section, setSection]       = useState('dashboard');
+  const [logs, setLogs]             = useState(INIT_LOGS);
+  const [positions, setPositions]   = useState([]);
+  const [signals, setSignals]       = useState([]);
+  const [modules, setModules]       = useLS('s9_modules', { visualAI: false, monteCarlo: true, telegram: true, paperMode: true });
+  const [strategies, setStrategies] = useLS('s9_strategies', window.STRATEGIES_DEFAULT);
+
+  const { motorState, connected, equity, dailyPnL } = useEngine(setLogs, setPositions, setSignals);
+
+  // Carga inicial de señales desde el servidor
+  useEffect(function() {
+    fetch('/api/signals')
+      .then(function(r) { return r.json(); })
+      .then(function(d) { if (Array.isArray(d) && d.length) setSignals(d); })
+      .catch(function() {});
+  }, []);
+
+  const [prices, setPrices] = useState({ BTCUSDT: 0, BTCChange: 0, ETHUSDT: 0, ETHChange: 0 });
+
+  // Polling fallback: fetch server-side price cache every 5 s
+  useEffect(function() {
+    function fetchPrices() {
+      fetch('/api/prices')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (!d || d.error) return;
+          setPrices(function(prev) {
+            var next = Object.assign({}, prev);
+            if (d.BTCUSDT && !prev.BTCUSDT) next.BTCUSDT = d.BTCUSDT;
+            if (d.BTCChange != null && !prev.BTCUSDT) next.BTCChange = d.BTCChange;
+            if (d.ETHUSDT && !prev.ETHUSDT) next.ETHUSDT = d.ETHUSDT;
+            if (d.ETHChange != null && !prev.ETHUSDT) next.ETHChange = d.ETHChange;
+            return next;
+          });
+        })
+        .catch(function() {});
+    }
+    fetchPrices();
+    var t = setInterval(fetchPrices, 5000);
+    return function() { clearInterval(t); };
+  }, []);
+
+  // Direct Binance WebSocket for real-time updates (overrides polling)
+  useEffect(function() {
+    var sockets = [];
+    function connect(symbol, priceKey, changeKey) {
+      var ws = new WebSocket('wss://fstream.binance.com/ws/' + symbol.toLowerCase() + '@ticker');
+      ws.onmessage = function(e) {
+        try {
+          var d = JSON.parse(e.data);
+          var price  = parseFloat(d.c);
+          var change = parseFloat(d.P);
+          if (!price) return;
+          setPrices(function(prev) {
+            var next = Object.assign({}, prev);
+            next[priceKey]  = price;
+            next[changeKey] = change;
+            return next;
+          });
+        } catch {}
+      };
+      ws.onclose = function() {
+        setTimeout(function() { connect(symbol, priceKey, changeKey); }, 3000);
+      };
+      sockets.push(ws);
+    }
+    connect('BTCUSDT', 'BTCUSDT', 'BTCChange');
+    connect('ETHUSDT', 'ETHUSDT', 'ETHChange');
+    return function() { sockets.forEach(function(ws) { ws.close(); }); };
+  }, []);
+
+  const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{"accentColor":"#4f8ef7","density":"compact","showMiniEquity":true,"animatePnL":true}/*EDITMODE-END*/;
+  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+
+  // Fetch live positions from backend every 3 s
+  useEffect(function() {
+    function fetchPos() {
+      fetch('/api/positions')
+        .then(function(r) { return r.json(); })
+        .then(function(d) { if (Array.isArray(d)) setPositions(d); })
+        .catch(function() {});
+    }
+    fetchPos();
+    var posTimer = setInterval(fetchPos, 3000);
+    return function() { clearInterval(posTimer); };
+  }, []);
+
+  const handleMotorChange = async (uiState) => {
+    const msgMap = {
+      RUNNING: ['INFO', 'Motor S9 iniciado — modo OBSERVE (selecciona PAPER o REAL desde Estrategias)'],
+      PAUSED:  ['WARN', 'Motor pausado — modo OBSERVE'],
+      STOP:    ['INFO', 'Motor detenido'],
+    };
+    setLogs(prev => [makeLog(msgMap[uiState] || msgMap.STOP), ...prev]);
+    try {
+      if (uiState === 'RUNNING') {
+        await fetch('/api/start', { method: 'POST' });
+        await fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'OBSERVE' }) });
+      } else if (uiState === 'PAUSED') {
+        await fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'OBSERVE' }) });
+      } else {
+        await fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'STOP' }) });
+        await fetch('/api/stop', { method: 'POST' });
+      }
+    } catch (e) {
+      setLogs(prev => [makeLog(['ERROR', `Error API: ${e.message}`]), ...prev]);
+    }
+  };
+
+  const handleUpdatePosition = function(id, patch) {
+    setPositions(function(prev) {
+      return prev.map(function(p) { return p.id === id ? { ...p, ...patch } : p; });
+    });
+    setLogs(function(prev) { return [makeLog(['INFO', 'SL/TP actualizado — posición #' + id]), ...prev]; });
+  };
+
+  const handleClosePosition = function(id) {
+    fetch('/api/positions/close/' + id, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.ok) {
+          setPositions(function(prev) { return prev.filter(function(x) { return x.id !== id; }); });
+          setLogs(function(prev) { return [makeLog(['INFO', 'Posición cerrada — P&L: ' + (d.pnl >= 0 ? '+' : '') + '$' + d.pnl]), ...prev]; });
+        }
+      })
+      .catch(function() {});
+  };
+
+  return (
+    <div style={{ display: 'flex', height: '100vh', background: T.bg, overflow: 'hidden' }}>
+      <Sidebar active={section} onChange={setSection} motorState={motorState} />
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
+        <TopBar
+          motorState={motorState}
+          onMotorChange={handleMotorChange}
+          section={section}
+          connected={connected}
+          equity={equity}
+          dailyPnL={dailyPnL}
+        />
+        <main id="s9-main" style={{ flex: 1, overflow: 'auto', padding: tweaks.density === 'compact' ? 12 : 20 }}>
+          {section === 'dashboard'   && <DashboardSection  motorState={motorState} logs={logs} positions={positions} prices={prices} />}
+          {section === 'posiciones'  && <PositionsSection  positions={positions} equity={equity} onClose={handleClosePosition} onUpdate={handleUpdatePosition} />}
+          {section === 'senales'     && <SignalsSection signals={signals} />}
+          {section === 'ordenes'     && <OrdersSection prices={prices} />}
+          {section === 'estrategias' && <StrategiasSection strategies={strategies} setStrategies={setStrategies} />}
+          {section === 'backtest'    && <BacktestSection />}
+          {section === 'config'      && <ConfigSection modules={modules} setModules={setModules} strategies={strategies} setStrategies={setStrategies} />}
+          {section === 'apis'        && <APIsSection prices={prices} />}
+          {section === 'deploy'      && <DeploySection />}
+        </main>
+      </div>
+      <TweaksPanel>
+        <TweakSection label="Apariencia" />
+        <TweakColor  label="Color acento"  value={tweaks.accentColor} onChange={v => setTweak('accentColor', v)} />
+        <TweakRadio  label="Densidad"      value={tweaks.density}     options={['compact','normal']} onChange={v => setTweak('density', v)} />
+        <TweakSection label="Comportamiento" />
+        <TweakToggle label="Animar P&amp;L en vivo"       value={tweaks.animatePnL}     onChange={v => setTweak('animatePnL', v)} />
+        <TweakToggle label="Mini equity en Dashboard" value={tweaks.showMiniEquity} onChange={v => setTweak('showMiniEquity', v)} />
+      </TweaksPanel>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

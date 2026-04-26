@@ -90,4 +90,4 @@ function volumeProfile(candles, bins = 30) {
   return { poc, vah, val, lvn, hi, lo };
 }
 
-module.exports = { ema, sma, atr, bollinger, rsi, volumeProfile };
+module.exports = { ema, sma, atr, bollinger, volumeProfile };

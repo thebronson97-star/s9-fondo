@@ -5,3 +5,7 @@ logs/
 *.log
 *.xlsx
 .DS_Store
+.claude/
+trades_s9.csv
+*.jpg
+*.png

@@ -1,0 +1,24 @@
+{
+  "name": "s9-fondo",
+  "version": "0.1.0",
+  "description": "S9-TRIPLEX: AMT + PO3/SMT + Measured Move — Futuros BTCUSDT/ETHUSDT",
+  "main": "index.js",
+  "scripts": {
+    "start":    "node index.js",
+    "paper":    "MODE=PAPER node index.js",
+    "backtest": "node backtest/run.js",
+    "bt:90":    "node backtest/run.js --days=90",
+    "bt:180":   "node backtest/run.js --days=180",
+    "bt:730":   "node backtest/run.js --days=730"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "axios":             "^1.7.9",
+    "dotenv":            "^16.4.5",
+    "express":           "^4.21.0",
+    "ws":                "^8.18.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

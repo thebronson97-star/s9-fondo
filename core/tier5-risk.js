@@ -7,23 +7,24 @@ const { ema, bollinger } = require('./indicators');
 function measuredMove(h4Candles) {
   // "Little RZY": find impulse leg, project 1:1 from pullback
   if (h4Candles.length < 10) return null;
-  const len = h4Candles.length;
   const swing = h4Candles.slice(-10);
   const hi = Math.max(...swing.map(c => c.h));
   const lo = Math.min(...swing.map(c => c.l));
-  return { target: hi + (hi - lo), distance: hi - lo, hi, lo };
+  return { distance: hi - lo, hi, lo };
 }
 
-function calculate({ bias, manipulation, accumRange, atrH4, candles1h, equity, config }) {
-  if (!bias || !manipulation?.detected || !atrH4 || !equity) {
+function calculate({ bias, manipulation, accumRange, atrH4, atr3m, candles1h, equity, config }) {
+  if (!bias || !manipulation?.detected || !equity) {
     return { pass: false, reason: 'missing_inputs' };
   }
 
-  const riskPct = config?.riskPerTrade ?? 0.005; // default 0.5%
+  const riskPct = (config?.tier_5_risk_target?.risk_per_trade_pct ?? 0.5) / 100;
   const riskUSD = equity * riskPct;
 
-  // SL = extremo del sweep ± 0.1 ATR
-  const slBuffer = atrH4 * 0.1;
+  // SL = extremo del sweep ± 0.1 ATR3m (fallback a H4 si 3m no disponible)
+  const slAtr = atr3m ?? atrH4;
+  if (!slAtr) return { pass: false, reason: 'missing_atr' };
+  const slBuffer = slAtr * 0.1;
   const sl = bias === 'LONG'
     ? manipulation.swept - slBuffer
     : manipulation.swept + slBuffer;
@@ -58,7 +59,7 @@ function calculate({ bias, manipulation, accumRange, atrH4, candles1h, equity, c
   const rr = +(tpDist / slDist).toFixed(2);
 
   // Minimum R:R from config
-  const minRR = config?.minRR ?? 2.0;
+  const minRR = config?.tier_5_risk_target?.min_rr ?? 2.0;
   if (rr < minRR) return { pass: false, reason: `rr_${rr}_below_${minRR}`, rr, sl, tp, size };
 
   // BE = 0.5R
